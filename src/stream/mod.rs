@@ -333,9 +333,9 @@ impl Stream {
                 .await?;
 
             let th_file_path = file_path.clone();
-            thread::spawn(move || {
-                log::info!("{}", cmd(format!("ffmpeg -i {} -codec: copy -start_number 0 -hls_time 10 -hls_list_size 0 -f hls {}", th_file_path.clone(), th_file_path.clone().replace(".mp4", ".m3u8"))))
-            });
+            let c = cmd(format!("ffmpeg -i {} -codec: copy -start_number 0 -hls_time 10 -hls_list_size 0 -f hls {}", th_file_path.clone(), th_file_path.clone().replace(".mp4", ".m3u8"))).await;
+            log::info!("{}", c);
+           
             #[cfg(feature = "callback")]
             if let Some(channel) = &channel {
                 // network chunks of ~10kb size
@@ -452,7 +452,7 @@ fn atomic_u64_is_eq(lhs: &Arc<AtomicU64>, rhs: &Arc<AtomicU64>) -> bool {
     lhs.load(Ordering::Acquire) == rhs.load(Ordering::Acquire)
 }
 
-pub fn cmd(command: String) -> String{
+pub async fn cmd(command: String) -> String{
     let cmd = Command::new("sh")
     .arg("-c")
     .arg(command.clone())
