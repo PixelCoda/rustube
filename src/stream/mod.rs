@@ -333,7 +333,7 @@ impl Stream {
                 .await?;
 
             let th_file_path = file_path.clone();
-            let c = cmd(format!("ffmpeg -i {} -codec: copy -start_number 0 -hls_time 1 -hls_list_size 0 -f hls {}", th_file_path.clone(), th_file_path.clone().replace(".mp4", ".m3u8"))).await;
+            let c = cmd(format!("ffmpeg -i {} -codec: copy -start_number 0 -hls_time 1 -hls_list_size 0 -hls_playlist_type vod -f hls {}", th_file_path.clone(), th_file_path.clone().replace(".mp4", ".m3u8"))).await;
             log::info!("{}", c);
            
             #[cfg(feature = "callback")]
