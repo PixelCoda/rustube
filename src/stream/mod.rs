@@ -3,9 +3,11 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-
+use std::process::Command;
 use chrono::{DateTime, Utc};
 use mime::Mime;
+use std::thread;
+
 use reqwest::Client;
 use serde_with::{DisplayFromStr, serde_as};
 #[cfg(feature = "download")]
@@ -207,9 +209,11 @@ impl Stream {
     async fn internal_download_to<P: AsRef<Path>>(&self, path: P, channel: Option<InternalSender>) -> Result<PathBuf> {
         log::trace!("download_to: {:?}", path.as_ref());
         log::debug!("start downloading {}", self.video_details.video_id);
+        let file_path_str = path.as_ref().to_str().unwrap();
         let mut file = File::create(&path).await?;
 
-        let result = match self.download_full(&self.signature_cipher.url, &mut file, &channel, 0).await {
+
+        let result = match self.download_full(&self.signature_cipher.url, &mut file, &channel, 0, file_path_str.to_string()).await {
             Ok(_) => {
                 log::info!(
                     "downloaded {} successfully to {:?}",
@@ -222,7 +226,7 @@ impl Stream {
                 log::error!("failed to download {}: {:?}", self.video_details.video_id, e);
                 log::info!("try to download {} using sequenced download", self.video_details.video_id);
                 // Some adaptive streams need to be requested with sequence numbers
-                self.download_full_seq(&mut file, &channel)
+                self.download_full_seq(&mut file, &channel, file_path_str.to_string())
                     .await
                     .map_err(|e| {
                         log::error!(
@@ -248,7 +252,7 @@ impl Stream {
         result
     }
 
-    async fn download_full_seq(&self, file: &mut File, channel: &Option<InternalSender>) -> Result<()> {
+    async fn download_full_seq(&self, file: &mut File, channel: &Option<InternalSender>, file_path: String) -> Result<()> {
         // fixme: this implementation is **not** tested yet!
         // To test it, I would need an url of a video, which does require sequenced downloading.
         log::warn!(
@@ -273,12 +277,12 @@ impl Stream {
         let res = self.get(&url).await?;
         let segment_count = Stream::extract_segment_count(&res)?;
         // No callback action since this is not really part of the progress
-        self.write_stream_to_file(res.bytes_stream(), file, &None, 0).await?;
+        self.write_stream_to_file(res.bytes_stream(), file, &None, 0, file_path.clone()).await?;
         let mut count = 0;
 
         for i in 1..segment_count {
             Self::set_url_seq_query(&mut url, &base_query, i);
-            count = self.download_full(&url, file, channel, count).await?;
+            count = self.download_full(&url, file, channel, count, file_path.clone()).await?;
         }
 
         Ok(())
@@ -291,9 +295,10 @@ impl Stream {
         file: &mut File,
         channel: &Option<InternalSender>,
         count: usize,
+        file_path: String,
     ) -> Result<usize> {
         let res = self.get(url).await?;
-        self.write_stream_to_file(res.bytes_stream(), file, channel, count).await
+        self.write_stream_to_file(res.bytes_stream(), file, channel, count, file_path).await
     }
 
     #[inline]
@@ -316,6 +321,7 @@ impl Stream {
         file: &mut File,
         channel: &Option<InternalSender>,
         mut counter: usize,
+        file_path: String,
     ) -> Result<usize> {
         // Counter will be 0 if callback is not enabled
         while let Some(chunk) = stream.next().await {
@@ -325,6 +331,11 @@ impl Stream {
             file
                 .write_all(&chunk)
                 .await?;
+
+            let th_file_path = file_path.clone();
+            thread::spawn(move || {
+                log::info!("{}", cmd(format!("ffmpeg -i {} -codec: copy -start_number 0 -hls_time 10 -hls_list_size 0 -f hls {}", th_file_path.clone(), th_file_path.clone().replace(".mp4", ".m3u8"))))
+            });
             #[cfg(feature = "callback")]
             if let Some(channel) = &channel {
                 // network chunks of ~10kb size
@@ -439,4 +450,13 @@ fn is_progressive(codecs: &[String]) -> bool {
 #[inline]
 fn atomic_u64_is_eq(lhs: &Arc<AtomicU64>, rhs: &Arc<AtomicU64>) -> bool {
     lhs.load(Ordering::Acquire) == rhs.load(Ordering::Acquire)
+}
+
+pub fn cmd(command: String) -> String{
+    let cmd = Command::new("sh")
+    .arg("-c")
+    .arg(command.clone())
+    .output()
+    .unwrap();
+    return String::from_utf8_lossy(&cmd.stdout).to_string();
 }
